@@ -1101,7 +1101,10 @@ search(void* parameter)
     printf("Nothing found for %s\n", search_item);
   }
 
+  pthread_mutex_lock(&(Zathura.Lock.search_lock));
   Zathura.Thread.search_thread_running = FALSE;
+  pthread_mutex_unlock(&(Zathura.Lock.search_lock));
+  
   pthread_exit(NULL);
 }
 
@@ -1312,8 +1315,8 @@ sc_search(Argument* argument)
   pthread_mutex_lock(&(Zathura.Lock.search_lock));
   if(Zathura.Thread.search_thread_running)
   {
-    pthread_mutex_unlock(&(Zathura.Lock.search_lock));
     Zathura.Thread.search_thread_running = FALSE;
+    pthread_mutex_unlock(&(Zathura.Lock.search_lock));
     pthread_join(Zathura.Thread.search_thread, NULL);
   }
   else
