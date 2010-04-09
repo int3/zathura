@@ -747,12 +747,18 @@ open_file(char* path, char* password)
   char* file = realpath(path, NULL);
 
   if(path[0] == '~')
-    file = g_strdup_printf("%s%s", getenv("HOME"), path + 1);
+  {
+    char* home_path = getenv("HOME");
+    int file_len = strlen(home_path) + strlen(path) - 1;
+    file = malloc(file_len);
+    snprintf(file, file_len, "%s%s", getenv("HOME"), path + 1);
+  }
 
   /* check if file exists */
   if(!g_file_test(file, G_FILE_TEST_IS_REGULAR))
   {
     notify(ERROR, "File does not exist");
+    free(file);
     return FALSE;
   }
 
@@ -2413,7 +2419,11 @@ cc_print(char* input)
   fp = popen(LIST_PRINTER_COMMAND, "r");
 
   if(!fp)
+  {
+    free(completion);
+    free(group);
     return NULL;
+  }
 
   while((current_char = fgetc(fp)) != EOF)
   {
