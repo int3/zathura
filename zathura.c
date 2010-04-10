@@ -804,7 +804,7 @@ open_file(char* path, char* password)
   Zathura.PDF.rotate          = 0;
   pthread_mutex_unlock(&(Zathura.Lock.rotate_lock));
   Zathura.PDF.pages           = malloc(Zathura.PDF.number_of_pages * sizeof(Page*));
-  Zathura.State.filename      = file;
+  Zathura.State.filename      = g_markup_escape_text(file, -1);
 
   /* get pages */
   int i;
