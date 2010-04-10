@@ -239,7 +239,9 @@ struct
   {
     GThread* search_thread;
     gboolean search_thread_running;
+    GThread* inotify_thread;
   } Thread;
+
 } Zathura;
 
 /* function declarations */
@@ -787,11 +789,11 @@ open_file(char* path, char* password)
   }
 
   /* inotify */
-  //if(Zathura.Inotify.fd != -1)
-  //{
-      //if((Zathura.Inotify.wd = inotify_add_watch(Zathura.Inotify.fd, file, IN_CLOSE_WRITE)) != -1)
-          //pthread_create(&(Zathura.Thread.inotify_thread), NULL, watch_file, NULL);
-  //}
+  if(Zathura.Inotify.fd != -1)
+  {
+    if((Zathura.Inotify.wd = inotify_add_watch(Zathura.Inotify.fd, file, IN_CLOSE_WRITE)) != -1)
+      Zathura.Thread.inotify_thread = g_thread_create(watch_file, NULL, TRUE, NULL);
+  }
 
   g_static_mutex_lock(&(Zathura.Lock.pdflib_lock));
   Zathura.PDF.number_of_pages = poppler_document_get_n_pages(Zathura.PDF.document);
@@ -1102,10 +1104,9 @@ search(void* parameter)
   g_static_mutex_lock(&(Zathura.Lock.search_lock));
   Zathura.Thread.search_thread_running = FALSE;
   g_static_mutex_unlock(&(Zathura.Lock.search_lock));
-  errlog("search 3: returned search_lock");
 
   g_thread_exit(NULL);
-  return NULL;
+  return NULL; // suppress GCC warnings about return value
 }
 
 void*
@@ -1135,13 +1136,17 @@ watch_file(void* parameter)
       open_file(path, password);
       
       Zathura.PDF.scale = scale;
+
+      gdk_threads_enter();
       draw(page);
+      gdk_threads_leave();
 
       break;
     }
   }
 
-  pthread_exit(NULL);
+  g_thread_exit(NULL);
+  return NULL;
 }
 
 /* shortcut implementation */
