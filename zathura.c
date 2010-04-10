@@ -232,7 +232,6 @@ struct
     GStaticMutex pdflib_lock;
     GStaticMutex document_lock;
     GStaticMutex search_lock;
-    GStaticMutex sc_search_lock;
   } Lock;
 
   struct
@@ -366,7 +365,6 @@ init_zathura()
   /* init mutexes */
   g_static_mutex_init(&(Zathura.Lock.pdflib_lock));
   g_static_mutex_init(&(Zathura.Lock.search_lock));
-  g_static_mutex_init(&(Zathura.Lock.sc_search_lock));
   g_static_mutex_init(&(Zathura.Lock.document_lock));
 
   /* look */
