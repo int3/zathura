@@ -36,6 +36,8 @@ static const char notification_e_bgcolor[] = "#FF1212";
 static const char notification_e_fgcolor[] = "#FFFFFF";
 static const char notification_w_bgcolor[] = "#FFF712";
 static const char notification_w_fgcolor[] = "#000000";
+static const char recolor_darkcolor[]      = "#353535";
+static const char recolor_lightcolor[]     = "#DBDBDB";
 
 static const char search_highlight[]       = "#9FBC00";
 
@@ -46,9 +48,13 @@ static const char DEFAULT_TEXT[] = "[No Name]";
 #define LIST_PRINTER_COMMAND "lpstat -v | sed -n '/^.*device for \\(.*\\): .*$/s//\\1/p'"
 #define PRINT_COMMAND "lp -d '%s' -p %s '%s'" /* printer / pages / file */
 
+/* open uri */
+#define URI_COMMAND "firefox %s" /* uri */
+
 /* additional settings */
 #define SHOW_SCROLLBARS 0
 #define ADJUST_OPEN ADJUST_BESTFIT
+#define RECOLOR_OPEN 0
 
 /* shortcuts */
 Shortcut shortcuts[] = {
@@ -57,7 +63,7 @@ Shortcut shortcuts[] = {
   {GDK_CONTROL_MASK,   GDK_m,             sc_toggle_inputbar,   NORMAL,   {0} },
   {GDK_CONTROL_MASK,   GDK_q,             sc_quit,              -1,       {0} },
   {GDK_CONTROL_MASK,   GDK_c,             sc_abort,             -1,       {0} },
-  {GDK_CONTROL_MASK,   GDK_i,             sc_revert_video,      NORMAL,   {0} },
+  {GDK_CONTROL_MASK,   GDK_i,             sc_recolor,           NORMAL,   {0} },
   {0,                  GDK_slash,         sc_focus_inputbar,    NORMAL,   { .data = "/" } },
   {GDK_SHIFT_MASK,     GDK_slash,         sc_focus_inputbar,    NORMAL,   { .data = "/" } },
   {GDK_SHIFT_MASK,     GDK_question,      sc_focus_inputbar,    NORMAL,   { .data = "?" } },
@@ -71,6 +77,7 @@ Shortcut shortcuts[] = {
   {0,                  GDK_apostrophe,    sc_change_mode,       NORMAL,   { EVAL_MARKER } },
   {0,                  GDK_colon,         sc_focus_inputbar,    NORMAL,   { .data = ":" } },
   {0,                  GDK_o,             sc_focus_inputbar,    NORMAL,   { .data = ":open " } },
+  {0,                  GDK_f,             sc_follow,            NORMAL,   {0} },
   {0,                  GDK_r,             sc_rotate,            NORMAL,   {0} },
   {0,                  GDK_h,             sc_scroll,            NORMAL,   { LEFT } },
   {0,                  GDK_j,             sc_scroll,            NORMAL,   { UP } },
@@ -136,6 +143,6 @@ SpecialCommand special_commands[] = {
 /* settings */
 Setting settings[] = {
   /* name,         variable,                        type,  render,  description */
-  {"revertvideo",  &(Zathura.Global.reverse_video), 'b',   TRUE,    "Invert the image"},
+  {"recolor",      &(Zathura.Global.recolor),       'b',   TRUE,    "Invert the image"},
   {"password",     &(Zathura.PDF.password),         's',   FALSE,   "The password of the document"},
 };
