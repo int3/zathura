@@ -1089,10 +1089,10 @@ search(void* parameter)
   g_static_mutex_lock(&(Zathura.Lock.document_lock));
   if(!Zathura.PDF.document || !search_item || !strlen(search_item))
   {
+    g_static_mutex_lock(&(Zathura.Lock.document_lock));
     g_static_mutex_lock(&(Zathura.Lock.search_lock));
     Zathura.Thread.search_thread_running = FALSE;
     g_static_mutex_unlock(&(Zathura.Lock.search_lock));
-    g_static_mutex_lock(&(Zathura.Lock.document_lock));
     g_thread_exit(NULL);
   }
   g_static_mutex_unlock(&(Zathura.Lock.document_lock));
@@ -1100,6 +1100,12 @@ search(void* parameter)
   /* search document */
   if(argument->n)
     direction = (argument->n == BACKWARD) ? -1 : 1;
+
+  // reduce number of global memory accesses within
+  // the for loop by storing these values locally.
+  // probably should wrap this in a mutex, but I'm lazy
+  number_of_pages = Zathura.PDF.number_of_pages;
+  page_number = Zathura.PDF.page_number;
 
   for(page_counter = 1; page_counter <= Zathura.PDF.number_of_pages; page_counter++)
   {
@@ -1111,9 +1117,8 @@ search(void* parameter)
     }
     g_static_mutex_unlock(&(Zathura.Lock.search_lock));
 
-    // probably should wrap this in a mutex, but I'm lazy
-    next_page = (Zathura.PDF.number_of_pages + Zathura.PDF.page_number +
-        page_counter * direction) % Zathura.PDF.number_of_pages;
+    next_page = (number_of_pages + page_number +
+        page_counter * direction) % number_of_pages;
 
     g_static_mutex_lock(&(Zathura.Lock.pdflib_lock));
     PopplerPage* page = poppler_document_get_page(Zathura.PDF.document, next_page);
