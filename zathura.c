@@ -27,7 +27,7 @@ enum { NEXT, PREVIOUS, LEFT, RIGHT, UP, DOWN,
        ZOOM_IN, ZOOM_OUT, ZOOM_ORIGINAL, ZOOM_SPECIFIC,
        FORWARD, BACKWARD, ADJUST_BESTFIT, ADJUST_WIDTH,
        ADJUST_NONE, CONTINUOUS, DELETE_LAST, ADD_MARKER,
-       EVAL_MARKER, INDEX, SELECT, EXPAND_ALL, COLLAPSE_ALL };
+       EVAL_MARKER, INDEX, SELECT };
 
 /* typedefs */
 struct CElement
@@ -1518,12 +1518,6 @@ sc_navigate_index(Argument* argument)
       // cb_index_row_activated does not use it anyway
       cb_index_row_activated(treeview, path, NULL, NULL);
       return;
-    case EXPAND_ALL:
-      gtk_tree_view_expand_all(treeview);
-      break;
-    case COLLAPSE_ALL:
-      gtk_tree_view_collapse_all(treeview);
-      break;
   }
 
   gtk_tree_selection_select_path(selection, path);
