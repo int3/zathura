@@ -27,7 +27,7 @@ enum { NEXT, PREVIOUS, LEFT, RIGHT, UP, DOWN,
        ZOOM_IN, ZOOM_OUT, ZOOM_ORIGINAL, ZOOM_SPECIFIC,
        FORWARD, BACKWARD, ADJUST_BESTFIT, ADJUST_WIDTH,
        ADJUST_NONE, CONTINUOUS, DELETE_LAST, ADD_MARKER,
-       EVAL_MARKER };
+       EVAL_MARKER, INDEX, SELECT, EXPAND_ALL, COLLAPSE_ALL };
 
 /* typedefs */
 struct CElement
@@ -288,6 +288,7 @@ void sc_recolor(Argument*);
 void sc_rotate(Argument*);
 void sc_scroll(Argument*);
 void sc_search(Argument*);
+void sc_navigate_index(Argument*);
 void sc_toggle_index(Argument*);
 void sc_toggle_inputbar(Argument*);
 void sc_toggle_statusbar(Argument*);
@@ -1104,8 +1105,8 @@ search(void* parameter)
   // reduce number of global memory accesses within
   // the for loop by storing these values locally.
   // probably should wrap this in a mutex, but I'm lazy
-  number_of_pages = Zathura.PDF.number_of_pages;
-  page_number = Zathura.PDF.page_number;
+  int number_of_pages = Zathura.PDF.number_of_pages;
+  int page_number = Zathura.PDF.page_number;
 
   for(page_counter = 1; page_counter <= Zathura.PDF.number_of_pages; page_counter++)
   {
@@ -1436,6 +1437,100 @@ sc_search(Argument* argument)
   g_static_mutex_unlock(&(Zathura.Lock.search_lock));
 }
 
+gboolean cb_index_row_activated(GtkTreeView* treeview, GtkTreePath* path,
+              GtkTreeViewColumn* column, gpointer user_data)
+{
+  GtkTreeModel  *model;
+  GtkTreeIter   iter;
+  g_object_get(treeview, "model", &model, NULL);
+
+  if(gtk_tree_model_get_iter(model, &iter, path))
+  {
+    PopplerAction* action;
+    PopplerDest*   destination;
+
+    gtk_tree_model_get(model, &iter, 1, &action, -1);
+    if(!action)
+      return TRUE;
+
+    if(action->type == POPPLER_ACTION_GOTO_DEST)
+    {
+      destination = action->goto_dest.dest;
+      int page_number = destination->page_num;
+
+      if(page_number >= 0 && page_number <= Zathura.PDF.number_of_pages)
+      {
+        set_page(page_number - 1);
+        update_status();
+        gtk_widget_grab_focus(GTK_WIDGET(Zathura.UI.view));
+      }
+    }
+  }
+
+  Zathura.Global.mode = NORMAL;
+
+  g_object_unref(model);
+
+  return TRUE;
+}
+
+void
+sc_navigate_index(Argument* argument)
+{
+  GtkTreeView *treeview = gtk_container_get_children(GTK_CONTAINER(Zathura.UI.index))->data;
+  GtkTreeSelection *selection = gtk_tree_view_get_selection(treeview);
+  GtkTreeModel *model = gtk_tree_view_get_model(treeview);
+  GtkTreeIter iter;
+
+  gtk_tree_selection_get_selected(selection, &model, &iter);
+  gchar *path_str = gtk_tree_model_get_string_from_iter(model, &iter);
+  GtkTreePath *path = gtk_tree_path_new_from_string(path_str);
+
+  GtkTreeIter parent_iter;
+  int num_children;
+  
+  switch (argument->n) {
+    case UP:
+      if (gtk_tree_path_prev(path))
+        break;
+    case LEFT:
+      gtk_tree_path_up(path);
+      gtk_tree_view_collapse_row(treeview, path);
+      break;
+    case DOWN:
+      if (gtk_tree_model_iter_parent(model, &parent_iter, &iter))
+      {
+        num_children = gtk_tree_model_iter_n_children(model, &parent_iter);
+        if (gtk_tree_path_get_indices(path)[gtk_tree_path_get_depth(path)-1] == num_children - 1)
+        {
+          gtk_tree_path_up(path);
+          gtk_tree_view_collapse_row(treeview, path);
+        }
+      }
+      gtk_tree_path_next(path);
+      break;
+    case RIGHT:
+      gtk_tree_view_expand_row(treeview, path, FALSE);
+      gtk_tree_path_down(path);
+      break;
+    case SELECT:
+      // argument 3 should not be NULL, but
+      // cb_index_row_activated does not use it anyway
+      cb_index_row_activated(treeview, path, NULL, NULL);
+      return;
+    case EXPAND_ALL:
+      gtk_tree_view_expand_all(treeview);
+      break;
+    case COLLAPSE_ALL:
+      gtk_tree_view_collapse_all(treeview);
+      break;
+  }
+
+  gtk_tree_selection_select_path(selection, path);
+
+  g_free(path_str);
+}
+
 void
 sc_toggle_index(Argument* argument)
 {
@@ -1480,7 +1575,7 @@ sc_toggle_index(Argument* argument)
 
     selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(treeview));
     gtk_tree_selection_select_path(selection, gtk_tree_path_new_first());
-    g_signal_connect(G_OBJECT(selection), "changed", G_CALLBACK(cb_index_selection_changed), NULL);
+    g_signal_connect(G_OBJECT(treeview), "row-activated", G_CALLBACK(cb_index_row_activated), NULL);
 
     gtk_container_add (GTK_CONTAINER (Zathura.UI.index), treeview);
     gtk_widget_show (treeview);
@@ -1489,9 +1584,15 @@ sc_toggle_index(Argument* argument)
 
   static gboolean show = FALSE;
   if(!show)
+  {
     switch_view(Zathura.UI.index);
+    Zathura.Global.mode = INDEX;
+  }
   else
+  {
     switch_view(Zathura.UI.drawing_area);
+    Zathura.Global.mode = NORMAL; // should we restore the old mode?
+  }
 
   show = !show;
 }
@@ -2779,38 +2880,6 @@ gboolean cb_draw(GtkWidget* widget, GdkEventExpose* expose, gpointer data)
   cairo_set_source_surface(cairo, Zathura.PDF.surface, offset_x, offset_y);
   cairo_paint(cairo);
   cairo_destroy(cairo);
-
-  return TRUE;
-}
-
-gboolean
-cb_index_selection_changed(GtkTreeSelection* treeselection, GtkWidget* action_view)
-{
-  GtkTreeModel *model;
-  GtkTreeIter   iter;
-
-  if(gtk_tree_selection_get_selected(treeselection, &model, &iter))
-  {
-    PopplerAction* action;
-    PopplerDest*   destination;
-
-    gtk_tree_model_get(model, &iter, 1, &action, -1);
-    if(!action)
-      return TRUE;
-
-    if(action->type == POPPLER_ACTION_GOTO_DEST)
-    {
-      destination = action->goto_dest.dest;
-      int page_number = destination->page_num;
-
-      if(page_number >= 0 && page_number <= Zathura.PDF.number_of_pages)
-      {
-        set_page(page_number - 1);
-        update_status();
-        gtk_widget_grab_focus(GTK_WIDGET(Zathura.UI.view));
-      }
-    }
-  }
 
   return TRUE;
 }
