@@ -2663,6 +2663,8 @@ bcmd_scroll(char* buffer, Argument* argument)
 void
 bcmd_zoom(char* buffer, Argument* argument)
 {
+  Zathura.Global.adjust_mode = ADJUST_NONE;
+
   if(argument->n == ZOOM_IN)
   {
     if((Zathura.PDF.scale + ZOOM_STEP) <= ZOOM_MAX)
@@ -2734,6 +2736,9 @@ cb_destroy(GtkWidget* widget, gpointer data)
 
 gboolean cb_draw(GtkWidget* widget, GdkEventExpose* expose, gpointer data)
 {
+  if(!Zathura.PDF.document)
+    return FALSE;
+
   int page_id = Zathura.PDF.page_number;
 
   if(page_id < 0 || page_id > Zathura.PDF.number_of_pages)
@@ -2818,6 +2823,11 @@ cb_index_selection_changed(GtkTreeSelection* treeselection, GtkWidget* action_vi
 gboolean
 cb_inputbar_kb_pressed(GtkWidget *widget, GdkEventKey *event, gpointer data)
 {
+  /* when the return button is pressed the inputbar is activated,
+   * so we do not handle it here */
+  if(event->keyval == GDK_Return)
+    return FALSE;
+
   int i;
 
   /* inputbar shortcuts */
@@ -2875,6 +2885,14 @@ cb_inputbar_activate(GtkEntry* entry, gpointer data)
   {
     if(identifier == special_commands[i].identifier)
     {
+      /* special commands that are evaluated every key change are not
+       * called here */
+      if(special_commands[i].always == 1)
+      {
+        isc_abort(NULL);
+        return TRUE;
+      }
+
       retv = special_commands[i].function(input, &(special_commands[i].argument));
       if(retv) isc_abort(NULL);
       gtk_widget_grab_focus(GTK_WIDGET(Zathura.UI.view));
