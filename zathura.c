@@ -27,7 +27,7 @@ enum { NEXT, PREVIOUS, LEFT, RIGHT, UP, DOWN,
        ZOOM_IN, ZOOM_OUT, ZOOM_ORIGINAL, ZOOM_SPECIFIC,
        FORWARD, BACKWARD, ADJUST_BESTFIT, ADJUST_WIDTH,
        ADJUST_NONE, CONTINUOUS, DELETE_LAST, ADD_MARKER,
-       EVAL_MARKER, INDEX, SELECT };
+       EVAL_MARKER, INDEX, EXPAND, COLLAPSE, SELECT };
 
 /* typedefs */
 struct CElement
@@ -1437,6 +1437,8 @@ sc_search(Argument* argument)
   g_static_mutex_unlock(&(Zathura.Lock.search_lock));
 }
 
+// finds the pdf page that corresponds to the given row
+// @param column is not used, and can be passed as NULL
 gboolean cb_index_row_activated(GtkTreeView* treeview, GtkTreePath* path,
               GtkTreeViewColumn* column, gpointer user_data)
 {
@@ -1478,51 +1480,79 @@ void
 sc_navigate_index(Argument* argument)
 {
   GtkTreeView *treeview = gtk_container_get_children(GTK_CONTAINER(Zathura.UI.index))->data;
-  GtkTreeSelection *selection = gtk_tree_view_get_selection(treeview);
+
+  GtkTreePath *path;
+  gtk_tree_view_get_cursor(treeview, &path, NULL);
+  if(!path) // no row selected
+    return;
+
   GtkTreeModel *model = gtk_tree_view_get_model(treeview);
   GtkTreeIter iter;
+  GtkTreeIter child_iter;
 
-  gtk_tree_selection_get_selected(selection, &model, &iter);
-  gchar *path_str = gtk_tree_model_get_string_from_iter(model, &iter);
-  GtkTreePath *path = gtk_tree_path_new_from_string(path_str);
+  gboolean is_valid_path = TRUE;
 
-  GtkTreeIter parent_iter;
-  int num_children;
-  
-  switch (argument->n) {
+  switch(argument->n) {
     case UP:
-      if (gtk_tree_path_prev(path))
-        break;
-    case LEFT:
-      gtk_tree_path_up(path);
-      gtk_tree_view_collapse_row(treeview, path);
-      break;
-    case DOWN:
-      if (gtk_tree_model_iter_parent(model, &parent_iter, &iter))
+      if(!gtk_tree_path_prev(path))
+        is_valid_path = gtk_tree_path_up(path);
+      else // find the row directly above
       {
-        num_children = gtk_tree_model_iter_n_children(model, &parent_iter);
-        if (gtk_tree_path_get_indices(path)[gtk_tree_path_get_depth(path)-1] == num_children - 1)
-        {
-          gtk_tree_path_up(path);
-          gtk_tree_view_collapse_row(treeview, path);
+        while(gtk_tree_view_row_expanded(treeview, path)) {
+          gtk_tree_model_get_iter(model, &iter, path);
+          // select the last child
+          gtk_tree_model_iter_nth_child(model, &child_iter, &iter,
+            gtk_tree_model_iter_n_children(model, &iter)-1);
+          gtk_tree_path_free(path);
+          path = gtk_tree_model_get_path(model, &child_iter);
         }
       }
-      gtk_tree_path_next(path);
       break;
-    case RIGHT:
-      gtk_tree_view_expand_row(treeview, path, FALSE);
-      gtk_tree_path_down(path);
+    case COLLAPSE:
+      if(!gtk_tree_view_collapse_row(treeview, path)
+        && gtk_tree_path_get_depth(path) > 1)
+      {
+        gtk_tree_path_up(path);
+        gtk_tree_view_collapse_row(treeview, path);
+      }
+      break;
+    case DOWN:
+      if(gtk_tree_view_row_expanded(treeview, path))
+        gtk_tree_path_down(path);
+      else
+      {
+        do
+        {
+          // path_next does not have a return value indicating
+          // whether it was successful. Hence the conversion to
+          // iter is necessary
+          gtk_tree_model_get_iter(model, &iter, path);
+          if (gtk_tree_model_iter_next(model, &iter))
+          {
+            path = gtk_tree_model_get_path(model, &iter);
+            break;
+          }
+        }
+        while((is_valid_path = (gtk_tree_path_get_depth(path) > 1))
+          && gtk_tree_path_up(path));
+        // gtk_tree_path_up does not return false when the depth of the
+        // resulting path is <= 0, hence the extra test is necessary.
+        // is this a gtk bug?
+      }
+      break;
+    case EXPAND:
+      if(gtk_tree_view_expand_row(treeview, path, FALSE))
+        gtk_tree_path_down(path);
       break;
     case SELECT:
-      // argument 3 should not be NULL, but
-      // cb_index_row_activated does not use it anyway
       cb_index_row_activated(treeview, path, NULL, NULL);
       return;
   }
 
-  gtk_tree_selection_select_path(selection, path);
+  if (is_valid_path)
+    gtk_tree_view_set_cursor(treeview, path, NULL, FALSE);
 
-  g_free(path_str);
+  gtk_tree_path_free(path);
 }
 
 void
@@ -1534,7 +1564,6 @@ sc_toggle_index(Argument* argument)
   GtkWidget        *treeview;
   GtkTreeModel     *model;
   GtkCellRenderer  *renderer;
-  GtkTreeSelection *selection;
   PopplerIndexIter *iter;
 
   if(!Zathura.UI.index)
@@ -1567,8 +1596,7 @@ sc_toggle_index(Argument* argument)
     g_object_set(G_OBJECT(renderer), "ellipsize", PANGO_ELLIPSIZE_END, NULL);
     g_object_set(G_OBJECT(gtk_tree_view_get_column(GTK_TREE_VIEW(treeview), 0)), "expand", TRUE, NULL);
 
-    selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(treeview));
-    gtk_tree_selection_select_path(selection, gtk_tree_path_new_first());
+    gtk_tree_view_set_cursor(GTK_TREE_VIEW(treeview), gtk_tree_path_new_first(), NULL, FALSE);
     g_signal_connect(G_OBJECT(treeview), "row-activated", G_CALLBACK(cb_index_row_activated), NULL);
 
     gtk_container_add (GTK_CONTAINER (Zathura.UI.index), treeview);
