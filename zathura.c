@@ -27,7 +27,8 @@ enum { NEXT, PREVIOUS, LEFT, RIGHT, UP, DOWN,
        ZOOM_IN, ZOOM_OUT, ZOOM_ORIGINAL, ZOOM_SPECIFIC,
        FORWARD, BACKWARD, ADJUST_BESTFIT, ADJUST_WIDTH,
        ADJUST_NONE, CONTINUOUS, DELETE_LAST, ADD_MARKER,
-       EVAL_MARKER, INDEX, EXPAND, COLLAPSE, SELECT };
+       EVAL_MARKER, INDEX, EXPAND, COLLAPSE, SELECT,
+       GOTO_DEFAULT, GOTO_LABELS, GOTO_OFFSET};
 
 /* typedefs */
 struct CElement
@@ -111,7 +112,9 @@ typedef struct
 
 typedef struct
 {
-  PopplerPage     *page;
+  PopplerPage *page;
+  int          id;
+  char        *label;
 } Page;
 
 typedef struct
@@ -184,6 +187,8 @@ struct
     int      mode;
     int      viewing_mode;
     gboolean recolor;
+    gboolean enable_labelmode;
+    int       goto_mode;
     GtkLabel *status_text;
     GtkLabel *status_buffer;
     GtkLabel *status_state;
@@ -225,6 +230,7 @@ struct
     char            *password;
     Page           **pages;
     int              page_number;
+    int              page_offset;
     int              number_of_pages;
     int              scale;
     int              rotate;
@@ -288,6 +294,7 @@ void sc_recolor(Argument*);
 void sc_rotate(Argument*);
 void sc_scroll(Argument*);
 void sc_search(Argument*);
+void sc_switch_goto_mode(Argument*);
 void sc_navigate_index(Argument*);
 void sc_toggle_index(Argument*);
 void sc_toggle_inputbar(Argument*);
@@ -304,6 +311,7 @@ void isc_string_manipulation(Argument*);
 gboolean cmd_bookmark(int, char**);
 gboolean cmd_open_bookmark(int, char**);
 gboolean cmd_close(int, char**);
+gboolean cmd_correct_offset(int, char**);
 gboolean cmd_delete_bookmark(int, char**);
 gboolean cmd_export(int, char**);
 gboolean cmd_info(int, char**);
@@ -334,7 +342,7 @@ gboolean scmd_search(char*, Argument*);
 /* callback declarations */
 gboolean cb_destroy(GtkWidget*, gpointer);
 gboolean cb_draw(GtkWidget*, GdkEventExpose*, gpointer);
-gboolean cb_index_selection_changed(GtkTreeSelection*, GtkWidget*);
+gboolean cb_index_row_activated(GtkTreeView*, GtkTreePath*, GtkTreeViewColumn*, gpointer);
 gboolean cb_inputbar_kb_pressed(GtkWidget*, GdkEventKey*, gpointer);
 gboolean cb_inputbar_activate(GtkEntry*, gpointer);
 gboolean cb_inputbar_form_activate(GtkEntry*, gpointer);
@@ -409,6 +417,7 @@ init_zathura()
   Zathura.Global.viewing_mode  = NORMAL;
   Zathura.Global.recolor       = RECOLOR_OPEN;
   Zathura.Global.adjust_mode   = ADJUST_OPEN;
+  Zathura.Global.goto_mode     = GOTO_MODE;
 
   Zathura.State.filename          = (char*) DEFAULT_TEXT;
   Zathura.State.pages             = "";
@@ -844,26 +853,45 @@ open_file(char* path, char* password)
   Zathura.PDF.pages           = malloc(Zathura.PDF.number_of_pages * sizeof(Page*));
   Zathura.State.filename      = g_markup_escape_text(file, -1);
 
-  /* get pages */
+  /* get pages and check label mode */
   g_static_mutex_lock(&(Zathura.Lock.pdflib_lock));
+  Zathura.Global.enable_labelmode = FALSE;
+
   int i;
   for(i = 0; i < Zathura.PDF.number_of_pages; i++)
   {
     Zathura.PDF.pages[i] = malloc(sizeof(Page));
+    Zathura.PDF.pages[i]->id = i + 1;
     Zathura.PDF.pages[i]->page = poppler_document_get_page(Zathura.PDF.document, i);
+    g_object_get(G_OBJECT(Zathura.PDF.pages[i]->page), "label", &(Zathura.PDF.pages[i]->label), NULL);
+
+    /* check if it is necessary to use the label mode */
+    int label_int = atoi(Zathura.PDF.pages[i]->label);
+    if(label_int == 0 || label_int != (i+1))
+      Zathura.Global.enable_labelmode = TRUE;
   }
   g_static_mutex_unlock(&(Zathura.Lock.pdflib_lock));
 
+  /* set correct goto mode */
+  if(!Zathura.Global.enable_labelmode && GOTO_MODE == GOTO_LABELS)
+    Zathura.Global.goto_mode = GOTO_DEFAULT;
+
   /* start page */
-  int start_page = 0;
+  int start_page          = 0;
+  Zathura.PDF.page_offset = 0;
 
   /* bookmarks */
-  if(Zathura.Bookmarks.data)
+  if(Zathura.Bookmarks.data && g_key_file_has_group(Zathura.Bookmarks.data, file))
   {
     /* get last opened page */
-    if(g_key_file_has_group(Zathura.Bookmarks.data, file))
-      if(g_key_file_has_key(Zathura.Bookmarks.data, file, BM_PAGE_ENTRY, NULL))
-        start_page = g_key_file_get_integer(Zathura.Bookmarks.data, file, BM_PAGE_ENTRY, NULL);
+    if(g_key_file_has_key(Zathura.Bookmarks.data, file, BM_PAGE_ENTRY, NULL))
+      start_page = g_key_file_get_integer(Zathura.Bookmarks.data, file, BM_PAGE_ENTRY, NULL);
+
+    /* get page offset */
+    if(g_key_file_has_key(Zathura.Bookmarks.data, file, BM_PAGE_OFFSET, NULL))
+      Zathura.PDF.page_offset = g_key_file_get_integer(Zathura.Bookmarks.data, file, BM_PAGE_OFFSET, NULL);
+    if((Zathura.PDF.page_offset != 0) && (Zathura.PDF.page_offset != GOTO_OFFSET))
+      Zathura.PDF.page_offset = GOTO_OFFSET;
 
     /* open and read bookmark file */
     gsize i              = 0;
@@ -872,7 +900,7 @@ open_file(char* path, char* password)
 
     for(i = 0; i < number_of_keys; i++)
     {
-      if(strcmp(keys[i], BM_PAGE_ENTRY))
+      if(strcmp(keys[i], BM_PAGE_ENTRY) && strcmp(keys[i], BM_PAGE_OFFSET))
       {
         Zathura.Bookmarks.bookmarks = realloc(Zathura.Bookmarks.bookmarks, 
             (Zathura.Bookmarks.number_of_bookmarks + 1) * sizeof(Bookmark)); 
@@ -906,9 +934,24 @@ update_status()
   /* update text */
   gtk_label_set_markup((GtkLabel*) Zathura.Global.status_text, Zathura.State.filename);
 
+  /* update pages */
+  if( Zathura.PDF.document && Zathura.PDF.pages )
+  {
+    int page = Zathura.PDF.page_number;
+    /*
+    if((Zathura.Global.goto_mode == GOTO_LABELS) && Zathura.PDF.pages[page]->label)
+      Zathura.State.pages = g_strdup_printf("[%s/%i]", 
+          Zathura.PDF.pages[page]->label, Zathura.PDF.number_of_pages);
+    else
+    */
+      Zathura.State.pages = g_strdup_printf("[%i/%i]", page + 1, Zathura.PDF.number_of_pages);
+  }
+
   /* update state */
-  char* zoom_level   = (Zathura.PDF.scale != 0) ? g_strdup_printf("%d%%", Zathura.PDF.scale) : "";
-  char* status_text  = g_strdup_printf("%s %d%% %s", zoom_level, Zathura.State.scroll_percentage, Zathura.State.pages);
+  char* zoom_level  = (Zathura.PDF.scale != 0) ? g_strdup_printf("%d%%", Zathura.PDF.scale) : "";
+  char* goto_mode   = (Zathura.Global.goto_mode == GOTO_LABELS) ? "L" : 
+    (Zathura.Global.goto_mode == GOTO_OFFSET) ? "O" : "D";
+  char* status_text = g_strdup_printf("%s [%s] %s", zoom_level, goto_mode, Zathura.State.pages);
   gtk_label_set_markup((GtkLabel*) Zathura.Global.status_state, status_text);
 }
 
@@ -1048,7 +1091,6 @@ set_page(int page)
   }
 
   Zathura.PDF.page_number = page;
-  Zathura.State.pages = g_strdup_printf("[%i/%i]", page + 1, Zathura.PDF.number_of_pages);
 
   Argument argument;
   argument.n = TOP;
@@ -1102,11 +1144,8 @@ search(void* parameter)
   if(argument->n)
     direction = (argument->n == BACKWARD) ? -1 : 1;
 
-  // reduce number of global memory accesses within
-  // the for loop by storing these values locally.
-  // probably should wrap this in a mutex, but I'm lazy
   int number_of_pages = Zathura.PDF.number_of_pages;
-  int page_number = Zathura.PDF.page_number;
+  int page_number     = Zathura.PDF.page_number;
 
   for(page_counter = 1; page_counter <= Zathura.PDF.number_of_pages; page_counter++)
   {
@@ -1148,17 +1187,13 @@ search(void* parameter)
 
     gdk_threads_leave();
   }
-  else
-  {
-    printf("Nothing found for %s\n", search_item);
-  }
 
   g_static_mutex_lock(&(Zathura.Lock.search_lock));
   Zathura.Thread.search_thread_running = FALSE;
   g_static_mutex_unlock(&(Zathura.Lock.search_lock));
 
   g_thread_exit(NULL);
-  return NULL; // suppress GCC warnings about return value
+  return NULL;
 }
 
 void*
@@ -1400,7 +1435,7 @@ sc_scroll(Argument* argument)
   gdouble value      = gtk_adjustment_get_value(adjustment);
   gdouble max        = gtk_adjustment_get_upper(adjustment) - view_size;
 
-  if( (argument->n == LEFT) || (argument->n == DOWN))
+  if( (argument->n == LEFT) || (argument->n == UP))
     gtk_adjustment_set_value(adjustment, (value - SCROLL_STEP) < 0 ? 0 : (value - SCROLL_STEP));
   else if (argument->n == TOP)
     gtk_adjustment_set_value(adjustment, 0);
@@ -1408,12 +1443,6 @@ sc_scroll(Argument* argument)
     gtk_adjustment_set_value(adjustment, max);
   else
     gtk_adjustment_set_value(adjustment, (value + SCROLL_STEP) > max ? max : (value + SCROLL_STEP));
-
-  int percentage = 100 * (value / max);
-  percentage = (percentage < 0) ? 0 : ((percentage > 100) ? 100 : percentage);
-
-  if( (argument->n != LEFT) && (argument->n != RIGHT) )
-    Zathura.State.scroll_percentage = percentage;
 
   update_status();
 }
@@ -1437,13 +1466,34 @@ sc_search(Argument* argument)
   g_static_mutex_unlock(&(Zathura.Lock.search_lock));
 }
 
-// finds the pdf page that corresponds to the given row
-// @param column is not used, and can be passed as NULL
+void
+sc_switch_goto_mode(Argument* argument)
+{
+  switch(Zathura.Global.goto_mode)
+  {
+    case GOTO_LABELS:
+      Zathura.Global.goto_mode = GOTO_OFFSET;
+      break;
+    case GOTO_OFFSET:
+      Zathura.Global.goto_mode = GOTO_DEFAULT;
+      break;
+    default:
+      if(Zathura.Global.enable_labelmode)
+        Zathura.Global.goto_mode = GOTO_LABELS;
+      else
+        Zathura.Global.goto_mode = GOTO_OFFSET;
+      break;
+  }
+
+  update_status();
+}
+
 gboolean cb_index_row_activated(GtkTreeView* treeview, GtkTreePath* path,
-              GtkTreeViewColumn* column, gpointer user_data)
+  GtkTreeViewColumn* column, gpointer user_data)
 {
   GtkTreeModel  *model;
   GtkTreeIter   iter;
+
   g_object_get(treeview, "model", &model, NULL);
 
   if(gtk_tree_model_get_iter(model, &iter, path))
@@ -1460,17 +1510,23 @@ gboolean cb_index_row_activated(GtkTreeView* treeview, GtkTreePath* path,
       destination = action->goto_dest.dest;
       int page_number = destination->page_num;
 
-      if(page_number >= 0 && page_number <= Zathura.PDF.number_of_pages)
+      if(action->goto_dest.dest->type == POPPLER_DEST_NAMED)
       {
-        set_page(page_number - 1);
-        update_status();
-        gtk_widget_grab_focus(GTK_WIDGET(Zathura.UI.view));
+        PopplerDest* d = poppler_document_find_dest(Zathura.PDF.document, action->goto_dest.dest->named_dest);
+        if(d)
+        {
+          page_number = d->page_num;
+          poppler_dest_free(d);
+        }
       }
+
+      set_page(page_number - 1);
+      update_status();
+      gtk_widget_grab_focus(GTK_WIDGET(Zathura.UI.view));
     }
   }
 
   Zathura.Global.mode = NORMAL;
-
   g_object_unref(model);
 
   return TRUE;
@@ -1480,27 +1536,28 @@ void
 sc_navigate_index(Argument* argument)
 {
   GtkTreeView *treeview = gtk_container_get_children(GTK_CONTAINER(Zathura.UI.index))->data;
-
   GtkTreePath *path;
+
   gtk_tree_view_get_cursor(treeview, &path, NULL);
-  if(!path) // no row selected
+  if(!path)
     return;
 
   GtkTreeModel *model = gtk_tree_view_get_model(treeview);
-  GtkTreeIter iter;
-  GtkTreeIter child_iter;
+  GtkTreeIter   iter;
+  GtkTreeIter   child_iter;
 
   gboolean is_valid_path = TRUE;
 
-  switch(argument->n) {
+  switch(argument->n)
+  {
     case UP:
       if(!gtk_tree_path_prev(path))
         is_valid_path = gtk_tree_path_up(path);
-      else // find the row directly above
+      else /* row above */
       {
         while(gtk_tree_view_row_expanded(treeview, path)) {
           gtk_tree_model_get_iter(model, &iter, path);
-          // select the last child
+          /* select last child */
           gtk_tree_model_iter_nth_child(model, &child_iter, &iter,
             gtk_tree_model_iter_n_children(model, &iter)-1);
           gtk_tree_path_free(path);
@@ -1523,9 +1580,6 @@ sc_navigate_index(Argument* argument)
       {
         do
         {
-          // path_next does not have a return value indicating
-          // whether it was successful. Hence the conversion to
-          // iter is necessary
           gtk_tree_model_get_iter(model, &iter, path);
           if (gtk_tree_model_iter_next(model, &iter))
           {
@@ -1535,9 +1589,6 @@ sc_navigate_index(Argument* argument)
         }
         while((is_valid_path = (gtk_tree_path_get_depth(path) > 1))
           && gtk_tree_path_up(path));
-        // gtk_tree_path_up does not return false when the depth of the
-        // resulting path is <= 0, hence the extra test is necessary.
-        // is this a gtk bug?
       }
       break;
     case EXPAND:
@@ -1613,7 +1664,7 @@ sc_toggle_index(Argument* argument)
   else
   {
     switch_view(Zathura.UI.drawing_area);
-    Zathura.Global.mode = NORMAL; // should we restore the old mode?
+    Zathura.Global.mode = NORMAL;
   }
 
   show = !show;
@@ -2057,6 +2108,10 @@ cmd_close(int argc, char** argv)
     g_key_file_set_integer(Zathura.Bookmarks.data, Zathura.PDF.file,
         BM_PAGE_ENTRY, Zathura.PDF.page_number);
 
+    /* set page offset */
+    g_key_file_set_integer(Zathura.Bookmarks.data, Zathura.PDF.file,
+        BM_PAGE_OFFSET, Zathura.PDF.page_offset);
+
     /* save bookmarks */
     int i;
     for(i = 0; i < Zathura.Bookmarks.number_of_bookmarks; i++)
@@ -2074,7 +2129,6 @@ cmd_close(int argc, char** argv)
     inotify_rm_watch(Zathura.Inotify.fd, Zathura.Inotify.wd);
 
   Zathura.Inotify.wd = -1;
-  /*pthread_cancel(Zathura.Thread.inotify_thread);*/
 
   /* reset values */
   free(Zathura.PDF.pages);
@@ -2092,6 +2146,7 @@ cmd_close(int argc, char** argv)
   Zathura.PDF.number_of_pages = 0;
   Zathura.PDF.scale           = 0;
   Zathura.PDF.rotate          = 0;
+  Zathura.PDF.page_offset     = 0;
 
   /* destroy index */
   if(Zathura.UI.index)
@@ -2112,6 +2167,24 @@ cmd_close(int argc, char** argv)
     free(Zathura.Marker.markers);
   Zathura.Marker.number_of_markers =  0;
   Zathura.Marker.last              = -1;
+
+  update_status();
+
+  return TRUE;
+}
+
+gboolean
+cmd_correct_offset(int argc, char** argv)
+{
+  if(!Zathura.PDF.document || argc == 0)
+    return TRUE;
+
+  Zathura.PDF.page_offset = (Zathura.PDF.page_number + 1) - atoi(argv[0]);
+
+  if(Zathura.PDF.page_offset != 0)
+    Zathura.Global.goto_mode = GOTO_OFFSET;
+  else
+    Zathura.Global.goto_mode = GOTO_MODE;
 
   update_status();
 
@@ -2405,9 +2478,9 @@ cmd_set(int argc, char** argv)
         if(argv[1])
         {
           if(!strcmp(argv[1], "false") || !strcmp(argv[1], "0"))
-            *x = TRUE;
-          else
             *x = FALSE;
+          else
+            *x = TRUE;
         }
       }
       else if(settings[i].type == 'i')
@@ -2449,6 +2522,7 @@ cmd_set(int argc, char** argv)
     }
   }
 
+  update_status();
   return TRUE;
 }
 
@@ -2757,7 +2831,23 @@ bcmd_goto(char* buffer, Argument* argument)
   else if(!strcmp(buffer, "G"))
     set_page(Zathura.PDF.number_of_pages - 1);
   else
-    set_page(atoi(g_strndup(buffer, b_length - 1)) - 1);
+  {
+    char* id = g_strndup(buffer, b_length - 1);
+    int  pid = atoi(id);
+
+    if(Zathura.Global.goto_mode == GOTO_LABELS)
+    {
+      int i;
+      for(i = 0; i < Zathura.PDF.number_of_pages; i++)
+        if(!strcmp(id, Zathura.PDF.pages[i]->label))
+          pid = Zathura.PDF.pages[i]->id;
+    }
+    else if(Zathura.Global.goto_mode == GOTO_OFFSET)
+      pid += Zathura.PDF.page_offset;
+
+    set_page(pid - 1);
+    g_free(id);
+   }
 
   update_status();
 }
@@ -3184,10 +3274,10 @@ int main(int argc, char* argv[])
   init_zathura();
   init_directories();
 
-  update_status();
-
   if(argc >= 2)
     open_file(argv[1], (argc == 3) ? argv[2] : NULL);
+
+  update_status();
 
   gtk_widget_show_all(GTK_WIDGET(Zathura.UI.window));
 
